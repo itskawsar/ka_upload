@@ -1,0 +1,144 @@
+<?php
+// Load all Field module hooks for File.
+require_once drupal_get_path('module', 'ka_upload') . '/ka_upload.field.inc';
+//define the ocnstant
+define('KA_UPLOAD_MODULE_PATH', drupal_get_path('module', 'ka_upload') );
+/**
+ * Implements hook_menu().
+ */
+function ka_upload_menu() {
+
+    $items['ka_upload/upload'] = array(
+        'page callback' => 'ka_upload_upload',
+        'access arguments' => array('access content'),
+        'type' => MENU_CALLBACK,
+    );
+    $items['ka_upload/delete/%/%'] = array(
+        'page callback' => 'ka_upload_delete',
+        'page arguments' => array(2, 3),
+        'access arguments' => array('access content'),
+        'type' => MENU_CALLBACK,
+    );
+
+    return $items;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function ka_upload_theme() {
+    return array(
+        'ka_upload_widget' => array(
+            'render element' => 'element',
+        ),
+        'ka_upload_element' => array(
+            'template' => 'ka-upload-element'
+        ),
+    );
+}
+
+/**
+ * Generates an unique key, used for validating  upload requests
+ */
+function _ka_sf_upload_post_key() {
+    global $user;
+    return bin2hex($user->uid . '*' . md5(($user->uid && $user->sid) ? $user->sid : $_SERVER['REMOTE_ADDR']));
+}
+
+/**
+ * Load the required css files to the page
+ */
+function ka_upload_load_css() {
+    drupal_add_css(KA_UPLOAD_MODULE_PATH . '/assets/css/jquery-ui.css');
+    drupal_add_css(KA_UPLOAD_MODULE_PATH . '/assets/css/bootstrap.min.css');
+    drupal_add_css(KA_UPLOAD_MODULE_PATH . '/assets/css/prettyPhoto.css');
+    drupal_add_css(KA_UPLOAD_MODULE_PATH . '/assets/css/ka_upload.css');
+}
+
+/**
+ * Load the required external js files to the page
+ */
+function ka_upload_load_external_js() {
+    
+    drupal_add_js(KA_UPLOAD_MODULE_PATH . "/assets/js/jquery.min.js", array('scope' => 'footer'));
+    drupal_add_js(KA_UPLOAD_MODULE_PATH . "/assets/js/jquery-ui.js", array('scope' => 'footer'));
+    drupal_add_js(KA_UPLOAD_MODULE_PATH . "/assets/js/jquery.form.js", array('scope' => 'footer'));
+    drupal_add_js(KA_UPLOAD_MODULE_PATH . "/assets/js/jquery.uploadfile.min.js", array('scope' => 'footer'));
+    drupal_add_js(KA_UPLOAD_MODULE_PATH . "/assets/js/jquery.prettyPhoto.js", array('scope' => 'footer'));
+    drupal_add_js(KA_UPLOAD_MODULE_PATH . "/assets/js/upload.custom.js", array('scope' => 'footer'));
+}
+
+function ka_upload_upload() {
+    $files = array();
+    $files_upload = $_FILE;
+    $file_path = $_REQUEST['file_path'];
+    $upload_name = $_REQUEST['field_name'];
+    $field_container = $_REQUEST['field_container'];
+    $element_name = $_REQUEST['element_name'];
+    $instance_settings = json_decode($_REQUEST['instance_settings'], true);
+    $destination = isset($file_path) ? $file_path : NULL;
+
+    if (isset($_REQUEST['load_existing_files'])) {
+        $files = file_load_multiple(explode(',', $_REQUEST['load_existing_files']));
+    } else {
+        if (isset($destination) && !file_prepare_directory($destination, FILE_CREATE_DIRECTORY)) {
+            watchdog('file', 'The upload directory %directory for the file field !name could not be created or is not accessible. A newly uploaded file could not be saved in this directory as a consequence, and the upload was canceled.', array('%directory' => $destination, '!name' => $upload_name));
+        }
+        $file = file_save_upload($upload_name, array('file_validate_extensions' => $instance_settings['file_extensions']), $destination);
+        if ($file) {
+            $file->status = FILE_STATUS_PERMANENT;
+            file_save($file);
+            $files[] = $file;
+        }
+    }
+    $info = ka_make_file_info_array($files, $field_container, $element_name);
+    drupal_json_output(
+        array(
+            'files' => $info, 
+            'files_files' => $files, 
+            'file_path'=>$file_path, 
+            'upload_name'=>$upload_name, 
+            'field_container'=>$field_container, 
+            'element_name'=>$element_name, 
+            'instance_settings'=>$instance_settings, 
+            'destination'=>$destination, 
+            'file'=>$_FILE, 
+            'post'=>$_POST
+            )
+        );
+}
+
+function ka_make_file_info_array($files = array(), $field_container, $element_name) {
+    $fileinfo = array();
+    $instance_settings = json_decode($_REQUEST['instance_settings'], true);
+    global $base_url;
+    foreach ($files as $file) {
+        $secure_file_name = file_munge_filename($file->filename, $instance_settings['file_extensions']);
+        $token = drupal_get_token($secure_file_name);
+        $fileinfo[] = array(
+            'name' => $file->filename,
+            'size' => $file->filesize,
+            'url' => file_create_url($file->uri),
+            'fid' => $file->fid,
+            'field_container' => $field_container,
+            'element_name' => $element_name,
+            'thumbnail_url' => image_style_url('thumbnail', $file->uri),
+            'delete_url' => $base_url . '/ka_upload/delete/' . $file->fid . '/' . $token,
+            'delete_type' => 'DELETE',
+        );
+    }
+    return $fileinfo;
+}
+
+/**
+ * Ajax call handler that deletes a file
+ */
+function ka_upload_delete($fid, $token) {
+    $content = array('success' => false);
+    $file = file_load($fid);
+    if ($file && drupal_valid_token($token, $file->filename)) {
+        file_delete($file);
+        $content = array('success' => true, 'fid' => $fid);
+    }
+    drupal_json_output($content);
+}
